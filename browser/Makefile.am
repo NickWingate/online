@@ -235,7 +235,6 @@ COOL_JS_LST =\
 	src/layer/SplitPanesContext.ts \
 	src/layer/CalcSplitPanesContext.ts \
 	src/layer/tile/TileLayer.TableOverlay.js \
-	src/layer/ObjectFocusDarkOverlay.js \
 	src/layer/tile/WriterTileLayer.js \
 	src/layer/tile/ImpressTileLayer.js \
 	src/layer/tile/CalcTileLayer.js \
