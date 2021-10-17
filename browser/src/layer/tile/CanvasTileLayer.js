@@ -3,7 +3,9 @@
  * L.CanvasTileLayer is a layer with canvas based rendering.
  */
 
-/* global app L CanvasSectionContainer CanvasOverlay CDarkOverlay CSplitterLine CStyleData CPoint $ _ isAnyVexDialogActive CPointSet CPolyUtil CPolygon Cursor CBounds CCellCursor CCellSelection PathGroupType */
+
+/* global app L CanvasSectionContainer CanvasOverlay CDarkOverlay CSplitterLine CStyleData $ _ isAnyVexDialogActive CPointSet CPolyUtil CPolygon Cursor CCellCursor CCellSelection PathGroupType */
+
 
 /*eslint no-extend-native:0*/
 if (typeof String.prototype.startsWith !== 'function') {
@@ -40,7 +42,7 @@ var CStyleData = L.Class.extend({
 	}
 });
 
-// CSelections is used to add/modify/clear selections (text/cell-area(s))
+// CSelections is used to add/modify/clear selections (text/cell-area(s)/ole)
 // on canvas using polygons (CPolygon).
 var CSelections = L.Class.extend({
 
@@ -321,9 +323,16 @@ L.TileSectionManager = L.Class.extend({
 	},
 
 	coordsIntersectVisible: function (coords) {
-		var ctx = this._paintContext();
-		var tileBounds = new L.Bounds(new L.Point(coords.x, coords.y), new L.Point(coords.x + ctx.tileSize.x, coords.y + ctx.tileSize.y));
-		return tileBounds.intersectsAny(ctx.paneBoundsList);
+		if (!app.file.fileBasedView) {
+			var ctx = this._paintContext();
+			var tileBounds = new L.Bounds(new L.Point(coords.x, coords.y), new L.Point(coords.x + ctx.tileSize.x, coords.y + ctx.tileSize.y));
+			return tileBounds.intersectsAny(ctx.paneBoundsList);
+		}
+		else {
+			var ratio = this._layer._tileSize / this._layer._tileHeightTwips;
+			var partHeightPixels = Math.round((this._layer._partHeightTwips + this._layer._spaceBetweenParts) * ratio);
+			return L.LOUtil._doRectanglesIntersect(app.file.viewedRectangle, [coords.x, coords.y + partHeightPixels * coords.part, app.tile.size.pixels[0], app.tile.size.pixels[1]]);
+		}
 	},
 
 	_addTilesSection: function () {
@@ -354,6 +363,7 @@ L.TileSectionManager = L.Class.extend({
 			onDraw: that._onDrawGridSection,
 			onDrawArea: that._drawGridSectionArea
 		}, 'tiles'); // Its size and position will be copied from 'tiles' section.
+		this._calcGridSection = this._sectionContainer.getSectionWithName(L.CSections.CalcGrid.name);
 	},
 
 	_addOverlaySection: function () {
@@ -404,8 +414,12 @@ L.TileSectionManager = L.Class.extend({
 			return;
 
 		var context = canvasCtx ? canvasCtx : this.context;
+		var tsManager = this.sectionProperties.tsManager;
 		context.strokeStyle = this.sectionProperties.strokeStyle;
 		context.lineWidth = 1.0;
+		var scale = 1.0;
+		if (tsManager._inZoomAnim && tsManager._zoomFrameScale)
+			scale = tsManager._zoomFrameScale;
 
 		var ctx = this.sectionProperties.tsManager._paintContext();
 		for (var i = 0; i < ctx.paneBoundsList.length; ++i) {
@@ -445,8 +459,8 @@ L.TileSectionManager = L.Class.extend({
 				this.sectionProperties.docLayer.sheetGeometry._columns.forEachInCorePixelRange(
 					repaintArea.min.x, repaintArea.max.x,
 					function(pos) {
-						context.moveTo(pos - paneOffset.x - 0.5, miny - paneOffset.y + 0.5);
-						context.lineTo(pos - paneOffset.x - 0.5, maxy - paneOffset.y - 0.5);
+						context.moveTo(Math.floor(scale * (pos - paneOffset.x)) - 0.5, Math.floor(scale * (miny - paneOffset.y)) + 0.5);
+						context.lineTo(Math.floor(scale * (pos - paneOffset.x)) - 0.5, Math.floor(scale * (maxy - paneOffset.y)) - 0.5);
 						context.stroke();
 					});
 
@@ -454,8 +468,8 @@ L.TileSectionManager = L.Class.extend({
 				this.sectionProperties.docLayer.sheetGeometry._rows.forEachInCorePixelRange(
 					miny, maxy,
 					function(pos) {
-						context.moveTo(repaintArea.min.x - paneOffset.x + 0.5, pos - paneOffset.y - 0.5);
-						context.lineTo(repaintArea.max.x - paneOffset.x - 0.5, pos - paneOffset.y - 0.5);
+						context.moveTo(Math.floor(scale * (repaintArea.min.x - paneOffset.x)) + 0.5, Math.floor(scale * (pos - paneOffset.y)) - 0.5);
+						context.lineTo(Math.floor(scale * (repaintArea.max.x - paneOffset.x)) - 0.5, Math.floor(scale * (pos - paneOffset.y)) - 0.5);
 						context.stroke();
 					});
 
@@ -574,7 +588,8 @@ L.TileSectionManager = L.Class.extend({
 			center.y = pinchCenter.y;
 
 		var xMin = 0;
-		if (paneBounds.min.x < 0)
+		var hasXMargin = !this._layer.isCalc();
+		if (hasXMargin)
 			xMin = -Infinity;
 		else if (paneBounds.min.x > 0)
 			xMin = splitPos.x;
@@ -620,59 +635,13 @@ L.TileSectionManager = L.Class.extend({
 	_zoomAnimation: function () {
 		var painter = this;
 		var ctx = this._paintContext();
-		var paneBoundsList = ctx.paneBoundsList;
-		var splitPos = ctx.splitPos;
 		var canvasOverlay = this._layer._canvasOverlay;
 
 		var rafFunc = function (timeStamp, final) {
-			painter._sectionContainer.setPenPosition(painter._tilesSection);
-			for (var i = 0; i < paneBoundsList.length; ++i) {
-				var paneBounds = paneBoundsList[i];
-				var paneSize = paneBounds.getSize();
-				var extendedBounds = painter._tilesSection.extendedPaneBounds(paneBounds);
-				var paneBoundsOffset = paneBounds.min.subtract(extendedBounds.min);
-				var scale = painter._zoomFrameScale;
-
-				// Top left in document coordinates.
-				var docPos = painter._getZoomDocPos(painter._newCenter, paneBounds, splitPos, scale, false /* findFreePaneCenter? */);
-				var docTopLeft = docPos.topLeft;
-
-				// Top left position in the offscreen canvas.
-				var sourceTopLeft = docTopLeft.subtract(paneBounds.min).add(paneBoundsOffset);
-
-				var destPos = new L.Point(0, 0);
-				if (paneBoundsList.length > 1) {
-					// Has freeze-panes, so recalculate the main canvas position to draw the pane
-					// and compute the adjusted paneSizes.
-					if (paneBounds.min.x) {
-						// Pane is free to move in X direction.
-						destPos.x = splitPos.x * scale;
-						paneSize.x -= (splitPos.x * (scale - 1));
-					} else {
-						// Pane is fixed in X direction.
-						paneSize.x += (splitPos.x * (scale - 1));
-					}
-
-					if (paneBounds.min.y) {
-						// Pane is free to move in Y direction.
-						destPos.y = splitPos.y * scale;
-						paneSize.y -= (splitPos.y * (scale - 1));
-					} else {
-						// Pane is fixed in Y direction.
-						paneSize.y += (splitPos.y * (scale - 1));
-					}
-				}
-
-				painter._tilesSection.context.drawImage(painter._tilesSection.offscreenCanvases[i],
-					sourceTopLeft.x, sourceTopLeft.y,
-					// sourceWidth, sourceHeight
-					paneSize.x / scale, paneSize.y / scale,
-					// destX, destY
-					destPos.x, destPos.y,
-					// destWidth, destHeight
-					paneSize.x, paneSize.y);
-			}
-
+			// Draw zoom frame with grids and directly from the tiles.
+			// This will clear the doc area first.
+			painter._tilesSection.drawZoomFrame(ctx);
+			// Draw the overlay objects.
 			canvasOverlay.onDraw();
 
 			if (!final)
@@ -711,13 +680,12 @@ L.TileSectionManager = L.Class.extend({
 		if (!this._inZoomAnim) {
 			this._sectionContainer.setInZoomAnimation(true);
 			this._inZoomAnim = true;
-			this._layer._prefetchTilesSync();
 			// Start RAF loop for zoom-animation
 			this._zoomAnimation();
 		}
 	},
 
-	zoomStepEnd: function (zoom, newCenter, mapUpdater, runAtFinish) {
+	zoomStepEnd: function (zoom, newCenter, mapUpdater, runAtFinish, noGap) {
 
 		if (!this._inZoomAnim || this._finishingZoom)
 			return;
@@ -728,9 +696,8 @@ L.TileSectionManager = L.Class.extend({
 		// Do a another animation from current non-integral log-zoom to
 		// the final integral zoom, but maintain the same center.
 		var steps = 10;
-		var stepId = 0;
-		// This buys us time till new tiles arrive.
-		var intervalGap = 20;
+		var stepId = noGap ? steps : 0;
+
 		var startZoom = this._zoomFrameScale;
 		var endZoom = this._calcZoomFrameScale(zoom);
 		var painter = this;
@@ -739,14 +706,14 @@ L.TileSectionManager = L.Class.extend({
 		// Calculate the final center at final zoom in advance.
 		var newMapCenter = this._getZoomMapCenter(zoom);
 		var newMapCenterLatLng = map.unproject(newMapCenter, zoom);
-		// Fetch tiles for the new zoom and center as we start final animation.
-		// But this does not update the map.
-		this._layer._update(newMapCenterLatLng, zoom);
+		painter._sectionContainer.setZoomChanged(true);
 
-		var stopAnimation = false;
+		var stopAnimation = noGap ? true : false;
 		var waitForTiles = false;
 		var waitTries = 30;
-		var intervalId = setInterval(function () {
+		var finishingRAF = undefined;
+
+		var finishAnimation = function () {
 
 			if (stepId < steps) {
 				// continue animating till we reach "close" to 'final zoom'.
@@ -754,7 +721,6 @@ L.TileSectionManager = L.Class.extend({
 				stepId += 1;
 				if (stepId >= steps)
 					stopAnimation = true;
-				return;
 			}
 
 			if (stopAnimation) {
@@ -767,12 +733,10 @@ L.TileSectionManager = L.Class.extend({
 				painter._sectionContainer.setInZoomAnimation(false);
 				painter._inZoomAnim = false;
 
-				painter._sectionContainer.setZoomChanged(true);
 				painter.setWaitForTiles(true);
 				// Set view and paint the tiles if all available.
 				mapUpdater(newMapCenterLatLng);
 				waitForTiles = true;
-				return;
 			}
 
 			if (waitForTiles) {
@@ -780,7 +744,7 @@ L.TileSectionManager = L.Class.extend({
 				if (waitTries <= 0 || painter._tilesSection.haveAllTilesInView()) {
 					// All done.
 					waitForTiles = false;
-					clearInterval(intervalId);
+					cancelAnimationFrame(finishingRAF);
 					painter.setWaitForTiles(false);
 					painter._sectionContainer.setZoomChanged(false);
 					map.enableTextInput();
@@ -790,16 +754,20 @@ L.TileSectionManager = L.Class.extend({
 					painter._finishingZoom = false;
 					// Run the finish callback.
 					runAtFinish();
+					return;
 				}
 				else
 					waitTries -= 1;
 			}
 
-		}, intervalGap);
+			finishingRAF = requestAnimationFrame(finishAnimation);
+		};
+
+		finishAnimation();
 	},
 
 	getTileSectionPos : function () {
-		return new CPoint(this._tilesSection.myTopLeft[0], this._tilesSection.myTopLeft[1]);
+		return new L.Point(this._tilesSection.myTopLeft[0], this._tilesSection.myTopLeft[1]);
 	}
 });
 
@@ -2019,10 +1987,10 @@ L.CanvasTileLayer = L.Layer.extend({
 	renderDarkOverlay: function () {
 		var zoom = this._map.getZoom();
 
-		var northEastPoint = this._latLngToCPoints(this._graphicSelection.getNorthEast(), zoom);
-		var southWestPoint = this._latLngToCPoints(this._graphicSelection.getSouthWest(), zoom);
+		var northEastPoint = this._latLngToCorePixels(this._graphicSelection.getNorthEast(), zoom);
+		var southWestPoint = this._latLngToCorePixels(this._graphicSelection.getSouthWest(), zoom);
 
-		this._cellCSelections.addObjectFocusDarkOverlay(new CBounds(
+		this._oleCSelections.addObjectFocusDarkOverlay(new L.Bounds(
 			northEastPoint,
 			southWestPoint
 		));
@@ -2037,10 +2005,10 @@ L.CanvasTileLayer = L.Layer.extend({
 		}
 		else if (textMsg.match('INPLACE EXIT')) {
 
-			this._cellCSelections.removeObjectFocusDarkOverlay();
+			this._oleCSelections.removeObjectFocusDarkOverlay();
 		}
 		else if (textMsg.match('INPLACE')) {
-			if (!this._cellCSelections.hasObjectFocusDarkOverlay()) {
+			if (!this._oleCSelections.hasObjectFocusDarkOverlay()) {
 				textMsg = '[' + textMsg.substr('graphicselection:'.length) + ']';
 				try {
 					var msgData = JSON.parse(textMsg);
@@ -2062,8 +2030,8 @@ L.CanvasTileLayer = L.Layer.extend({
 			this._extractAndSetGraphicSelection(msgData);
 
 			// Update the dark overlay on zooming & scrolling
-			if (this._cellCSelections.hasObjectFocusDarkOverlay()) {
-				this._cellCSelections.removeObjectFocusDarkOverlay();
+			if (this._oleCSelections.hasObjectFocusDarkOverlay()) {
+				this._oleCSelections.removeObjectFocusDarkOverlay();
 				this.renderDarkOverlay();
 			}
 
@@ -2325,7 +2293,7 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._visibleCursor = new L.LatLngBounds(
 			this._twipsToLatLng(recCursor.getTopLeft(), this._map.getZoom()),
 			this._twipsToLatLng(recCursor.getBottomRight(), this._map.getZoom()));
-		this._cursorCorePixels = CBounds.fromCompat(this._twipsToCorePixelsBounds(recCursor));
+		this._cursorCorePixels = this._twipsToCorePixelsBounds(recCursor);
 
 		var cursorPos = this._visibleCursor.getNorthWest();
 		var docLayer = this._map._docLayer;
@@ -2397,7 +2365,7 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._viewCursors[viewId].bounds = new L.LatLngBounds(
 			this._twipsToLatLng(rectangle.getTopLeft(), this._map.getZoom()),
 			this._twipsToLatLng(rectangle.getBottomRight(), this._map.getZoom())),
-		this._viewCursors[viewId].corepxBounds = CBounds.fromCompat(this._twipsToCorePixelsBounds(rectangle));
+		this._viewCursors[viewId].corepxBounds = this._twipsToCorePixelsBounds(rectangle);
 		this._viewCursors[viewId].part = parseInt(obj.part);
 
 		// FIXME. Server not sending view visible cursor
@@ -3249,6 +3217,8 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._textCSelections.clear();
 		// hide the cell selection
 		this._cellCSelections.clear();
+		// hide the ole selection
+		this._oleCSelections.clear();
 		// hide the selection handles
 		this._onUpdateTextSelection();
 		// hide the graphic selection
@@ -3479,6 +3449,10 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._replayPrintTwipsMsg('invalidatecursor');
 	},
 
+	_isAnyInputFocused: function() {
+		return $('input:focus').length > 0;
+	},
+
 	// enable or disable blinking cursor and  the cursor overlay depending on
 	// the state of the document (if the falgs are set)
 	_updateCursorAndOverlay: function (/*update*/) {
@@ -3496,6 +3470,7 @@ L.CanvasTileLayer = L.Layer.extend({
 				this._map._textInput.showCursor();
 			}
 
+			var hasMobileWizardOpened = this._map.uiManager.mobileWizard ? this._map.uiManager.mobileWizard.isOpen() : false;
 			// Don't show the keyboard when the Wizard is visible.
 			if (!window.mobileWizard && !window.pageMobileWizard &&
 				!window.insertionMobileWizard && !hasMobileWizardOpened &&
@@ -3515,7 +3490,8 @@ L.CanvasTileLayer = L.Layer.extend({
 		} else {
 			this._map._textInput.hideCursor();
 			// Maintain input if a dialog or search-box has the focus.
-			if (this._map.editorHasFocus() && !isAnyVexDialogActive() && !this._map.isSearching())
+			if (this._map.editorHasFocus() && !isAnyVexDialogActive() && !this._map.isSearching()
+				&& !this._isAnyInputFocused())
 				this._map.focus(false);
 		}
 	},
@@ -4024,7 +4000,9 @@ L.CanvasTileLayer = L.Layer.extend({
 	_onUpdateGraphicSelection: function () {
 		if (this._graphicSelection && !this._isEmptyRectangle(this._graphicSelection)) {
 			// Hide the keyboard on graphic selection, unless cursor is visible.
-			this._map.focus(this.isCursorVisible());
+			// Don't interrupt editing in dialogs
+			if (!this._isAnyInputFocused())
+				this._map.focus(this.isCursorVisible());
 
 			if (this._graphicMarker) {
 				this._graphicMarker.removeEventParent(this._map);
@@ -4150,10 +4128,8 @@ L.CanvasTileLayer = L.Layer.extend({
 
 			var hasTunneledDialogOpened = this._map.dialog ? this._map.dialog.hasOpenedDialog() : false;
 			var hasJSDialogOpened = this._map.jsdialog ? this._map.jsdialog.hasDialogOpened() : false;
-			var isEditingAnnotation = this.editedAnnotation &&
-				(this._map.hasLayer(this.editedAnnotation) || this._map.hasLayer(this.editedAnnotation.annotation));
-			var isAnyInputFocused = $('input:focus').length > 0;
-			var dontFocusDocument = hasTunneledDialogOpened || hasJSDialogOpened || isEditingAnnotation || isAnyInputFocused;
+
+			var dontFocusDocument = hasTunneledDialogOpened || hasJSDialogOpened || app.view.commentHasFocus || this._isAnyInputFocused();
 
 			// when the cell cursor is moving, the user is in the document,
 			// and the focus should leave the cell input bar
@@ -5071,6 +5047,7 @@ L.CanvasTileLayer = L.Layer.extend({
 
 			var newSize = this._getRealMapSize();
 			var heightIncreased = oldSize.y < newSize.y;
+			var widthIncreased = oldSize.x < newSize.x;
 
 			if (this._docType === 'spreadsheet') {
 				if (this._painter._sectionContainer.doesSectionExist(L.CSections.RowHeader.name)) {
@@ -5083,7 +5060,8 @@ L.CanvasTileLayer = L.Layer.extend({
 				this._map.invalidateSize();
 			}
 
-			if (window.mode.isMobile()) {
+			var hasMobileWizardOpened = this._map.uiManager.mobileWizard ? this._map.uiManager.mobileWizard.isOpen() : false;
+			if (window.mode.isMobile() && !hasMobileWizardOpened) {
 				if (heightIncreased) {
 					// if the keyboard is hidden - be sure we setup correct state in TextInput
 					this._map.focus(false);
@@ -5110,6 +5088,9 @@ L.CanvasTileLayer = L.Layer.extend({
 				if (!cursorPositionInView)
 					this._map.panTo(cursorPos);
 			}
+
+			if (heightIncreased || widthIncreased)
+				this._painter._sectionContainer.requestReDraw();
 		}
 	},
 
@@ -5140,6 +5121,8 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._textCSelections = new CSelections(undefined, this._canvasOverlay,
 			this._selectionsDataDiv, this._map, false /* isView */, undefined, true /* isText */);
 		this._cellCSelections = new CSelections(undefined, this._canvasOverlay,
+			this._selectionsDataDiv, this._map, false /* isView */, undefined, false /* isText */);
+		this._oleCSelections = new CSelections(undefined, this._canvasOverlay,
 			this._selectionsDataDiv, this._map, false /* isView */, undefined, false /* isText */);
 		this._references = new CReferences(this._canvasOverlay);
 		this._referencesAll = [];
@@ -5248,6 +5231,10 @@ L.CanvasTileLayer = L.Layer.extend({
 			this._textCSelections.clear();
 		}
 
+		if (!this._oleCSelections.empty()) {
+			this._oleCSelections.clear();
+		}
+
 		if (this._cursorMarker && this._cursorMarker.isDomAttached()) {
 			this._cursorMarker.remove();
 		}
@@ -5280,8 +5267,8 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._painter.zoomStep(zoom, newCenter);
 	},
 
-	zoomStepEnd: function (zoom, newCenter, mapUpdater, runAtFinish) {
-		this._painter.zoomStepEnd(zoom, newCenter, mapUpdater, runAtFinish);
+	zoomStepEnd: function (zoom, newCenter, mapUpdater, runAtFinish, noGap) {
+		this._painter.zoomStepEnd(zoom, newCenter, mapUpdater, runAtFinish, noGap);
 	},
 
 	preZoomAnimation: function () {
@@ -5464,12 +5451,6 @@ L.CanvasTileLayer = L.Layer.extend({
 			twips.y / this._tileHeightTwips * this._tileSize);
 	},
 
-	_twipsToCPoints: function (twips) {
-		return new CPoint(
-			twips.x / this._tileWidthTwips * this._tileSize,
-			twips.y / this._tileHeightTwips * this._tileSize);
-	},
-
 	_twipsToCorePixelsBounds: function (twips) {
 		return new L.Bounds(
 			this._twipsToCorePixels(twips.min),
@@ -5505,9 +5486,11 @@ L.CanvasTileLayer = L.Layer.extend({
 		return this._cssPixelsToTwips(pixels);
 	},
 
-	_latLngToCPoints: function(latLng, zoom) {
+	_latLngToCorePixels: function(latLng, zoom) {
 		var pixels = this._map.project(latLng, zoom);
-		return new CPoint (pixels.x * app.dpiScale, pixels.y * app.dpiScale);
+		return new L.Point (
+			pixels.x * app.dpiScale,
+			pixels.y * app.dpiScale);
 	},
 
 	_twipsToPixels: function (twips) { // css pixels
@@ -5574,20 +5557,28 @@ L.CanvasTileLayer = L.Layer.extend({
 				}
 			}
 			if (!found)
-				parts.push({part: queue[i].part, tileCount: 0});
+				parts.push({part: queue[i].part});
 			found = false;
 		}
 
-		var maxTileCount = 0;
+		var ratio = this._tileSize / this._tileHeightTwips;
+		var partHeightPixels = Math.round((this._partHeightTwips + this._spaceBetweenParts) * ratio);
+		var partWidthPixels = Math.round(this._partWidthTwips * ratio);
+
+		var rectangle;
+		var maxArea = -1;
 		var mostVisiblePart = 0;
+		var docBoundsRectangle = app.sectionContainer.getDocumentBounds();
+		docBoundsRectangle[2] = docBoundsRectangle[2] - docBoundsRectangle[0];
+		docBoundsRectangle[3] = docBoundsRectangle[3] - docBoundsRectangle[1];
 		for (i = 0; i < parts.length; i++) {
-			for (var j = 0; j < queue.length; j++) {
-				if (queue[j].part === parts[i].part)
-					parts[i].tileCount++;
-			}
-			if (parts[i].tileCount > maxTileCount) {
-				maxTileCount = parts[i].tileCount;
-				mostVisiblePart = parts[i].part;
+			rectangle = [0, partHeightPixels * parts[i].part, partWidthPixels, partHeightPixels];
+			rectangle = L.LOUtil._getIntersectionRectangle(rectangle, docBoundsRectangle);
+			if (rectangle) {
+				if (rectangle[2] * rectangle[3] > maxArea) {
+					maxArea = rectangle[2] * rectangle[3];
+					mostVisiblePart = parts[i].part;
+				}
 			}
 		}
 		return mostVisiblePart;
@@ -5599,37 +5590,6 @@ L.CanvasTileLayer = L.Layer.extend({
 				return true;
 		}
 		return false;
-	},
-
-	// In file based view, all parts may be drawn, not only selected part.
-	_getTileInfoForFileBasedView: function (currentX, currentY, zoom, partHeightPixels, queue) {
-		var yMin = currentY;
-		var yMax = yMin + this._tileSize;
-
-		var parts = [];
-		for (var i = 0; i < this._parts; i++) {
-			var partMin = i * partHeightPixels;
-			var partMax = (i + 1) * partHeightPixels;
-			if ((yMin >= partMin && yMin <= partMax) || (yMax >= partMin && yMax <= partMax)) {
-				parts.push(i);
-			}
-		}
-
-		for (i = 0; i < parts.length; i++) {
-			var yMinLocal = yMin - parts[i] * partHeightPixels;
-			if (yMinLocal >= 0) {
-				yMinLocal = yMinLocal - yMinLocal % this._tileSize;
-				if (!this._doesQueueIncludeTileInfo(queue, parts[i], currentX, yMinLocal))
-					queue.push(new L.TileCoordData(currentX, yMinLocal, zoom, parts[i]));
-			}
-
-			var yMaxLocal = yMax - parts[i] * partHeightPixels;
-			if (yMaxLocal >= 0) {
-				yMaxLocal = yMaxLocal - yMaxLocal % this._tileSize;
-				if (!this._doesQueueIncludeTileInfo(queue, parts[i], currentX, yMaxLocal))
-					queue.push(new L.TileCoordData(currentX, yMaxLocal, zoom, parts[i]));
-			}
-		}
 	},
 
 	_sortFileBasedQueue: function (queue) {
@@ -5675,56 +5635,82 @@ L.CanvasTileLayer = L.Layer.extend({
 		}
 	},
 
-	_updateFileBasedView: function (checkOnly) {
+	_updateFileBasedView: function (checkOnly, zoomFrameBounds, forZoom) {
 		if (this._partHeightTwips === 0) // This is true before status message is handled.
 			return [];
 		if (this._isZooming)
 			return [];
 
-		var zoom = Math.round(this._map.getZoom());
+		if (!checkOnly) {
+			// zoomFrameBounds and forZoom params were introduced to work only in checkOnly mode.
+			console.assert(zoomFrameBounds === undefined, 'zoomFrameBounds must only be supplied when checkOnly is true');
+			console.assert(forZoom === undefined, 'forZoom must only be supplied when checkOnly is true');
+		}
 
-		var ratio = this._tileSize / this._tileHeightTwips;
+		if (forZoom !== undefined) {
+			console.assert(zoomFrameBounds, 'zoomFrameBounds must be valid when forZoom is specified');
+		}
+
+		var zoom = forZoom || Math.round(this._map.getZoom());
+		var currZoom = Math.round(this._map.getZoom());
+		var relScale = currZoom == zoom ? 1 : this._map.getZoomScale(zoom, currZoom);
+
+		var ratio = this._tileSize * relScale / this._tileHeightTwips;
 		var partHeightPixels = Math.round((this._partHeightTwips + this._spaceBetweenParts) * ratio);
+		var partWidthPixels = Math.round((this._partWidthTwips) * ratio);
 
-		var topLeft = app.sectionContainer.getDocumentTopLeft();
-		var bottomRight = app.sectionContainer.getDocumentBottomRight();
-
-		topLeft = [topLeft[0] - topLeft[0] % this._tileSize, topLeft[1] - topLeft[1] % this._tileSize];
-		bottomRight = [bottomRight[0] - bottomRight[0] % this._tileSize, bottomRight[1] - bottomRight[1] % this._tileSize];
-
-		var currentX = topLeft[0];
-		var currentY = topLeft[1];
+		var intersectionAreaRectangle = L.LOUtil._getIntersectionRectangle(app.file.viewedRectangle, [0, 0, partWidthPixels, partHeightPixels * this._parts]);
 
 		var queue = [];
-		while (currentY <= bottomRight[1]) {
-			if (currentX > bottomRight[0]) {
-				currentX = topLeft[0];
-				currentY += this._tileSize;
+
+		if (intersectionAreaRectangle) {
+			var minLocalX = Math.floor(intersectionAreaRectangle[0] / app.tile.size.pixels[0]) * app.tile.size.pixels[0];
+			var maxLocalX = Math.floor((intersectionAreaRectangle[0] + intersectionAreaRectangle[2]) / app.tile.size.pixels[0]) * app.tile.size.pixels[0];
+
+			var startPart = Math.floor(intersectionAreaRectangle[1] / partHeightPixels);
+			var startY = app.file.viewedRectangle[1] - startPart * partHeightPixels;
+			startY = Math.floor(startY / app.tile.size.pixels[1]) * app.tile.size.pixels[1];
+
+			var endPart = Math.ceil((intersectionAreaRectangle[1] + intersectionAreaRectangle[3]) / partHeightPixels);
+			var endY = app.file.viewedRectangle[1] + app.file.viewedRectangle[3] - endPart * partHeightPixels;
+			endY = Math.floor(endY / app.tile.size.pixels[1]) * app.tile.size.pixels[1];
+
+			var vTileCountPerPart = Math.ceil(partHeightPixels / app.tile.size.pixels[1]);
+
+			for (var i = startPart; i < endPart; i++) {
+				for (var j = minLocalX; j <= maxLocalX; j += app.tile.size.pixels[0]) {
+					for (var k = 0; k <= vTileCountPerPart * app.tile.size.pixels[0]; k += app.tile.size.pixels[1])
+						if ((i !== startPart || k >= startY) && (i !== endPart || k <= endY))
+							queue.push(new L.TileCoordData(j, k, zoom, i));
+				}
 			}
 
-			this._getTileInfoForFileBasedView(currentX, currentY, zoom, partHeightPixels, queue);
-			currentX += this._tileSize;
-		}
+			this._sortFileBasedQueue(queue);
 
-		this._sortFileBasedQueue(queue);
-
-		if (queue.length > 0) {
-			var partToSelect = this._getMostVisiblePart(queue);
-			if (this._selectedPart !== partToSelect) {
-				this._selectedPart = partToSelect;
-				this._preview._scrollToPart();
+			if (queue.length > 0) {
+				var partToSelect = this._getMostVisiblePart(queue);
+				if (this._selectedPart !== partToSelect) {
+					this._selectedPart = partToSelect;
+					this._preview._scrollToPart();
+					this.highlightCurrentPart(partToSelect);
+				}
 			}
-			this.highlightCurrentPart(partToSelect);
-		}
 
-		for (var i = 0; i < this._tiles.length; i++) {
-			this._tiles[i].current = false; // Visible ones's "current" property will be set to true below.
-		}
+			for (i = 0; i < this._tiles.length; i++) {
+				this._tiles[i].current = false; // Visible ones's "current" property will be set to true below.
+			}
 
-		for (i = 0; i < queue.length; i++) {
-			var tempTile = this._tiles[this._tileCoordsToKey(queue[i])];
-			if (tempTile && tempTile.loaded)
-				tempTile.current = true;
+			var allNewTiles = true;
+			for (i = 0; i < queue.length; i++) {
+				var tempTile = this._tiles[this._tileCoordsToKey(queue[i])];
+				if (tempTile && tempTile.loaded) {
+					tempTile.current = true;
+					allNewTiles = false;
+				}
+			}
+
+			if (allNewTiles && !checkOnly)
+				this._cancelTiles();
 		}
 
 		if (checkOnly) {
@@ -5996,14 +5982,6 @@ L.CanvasTileLayer = L.Layer.extend({
 				// This may not be immediate if we are now in a slurp events call.
 				this._painter.update();
 			}
-		}
-
-		if (typeof (this._prevSelectedPart) === 'number' &&
-			this._prevSelectedPart !== this._selectedPart
-			&& this._docType === 'spreadsheet') {
-			this._map.fire('updatescrolloffset', { x: 0, y: 0, updateHeaders: false });
-			this._map.scrollTop(0);
-			this._map.scrollLeft(0);
 		}
 	},
 
@@ -6528,6 +6506,8 @@ L.TilesPreFetcher = L.Class.extend({
 	},
 
 	preFetchTiles: function (forceBorderCalc, immediate) {
+		if (app.file.fileBasedView && this._docLayer)
+			this._docLayer._updateFileBasedView();
 
 		if (this._docLayer._emptyTilesCount > 0 || !this._map || !this._docLayer) {
 			return;
