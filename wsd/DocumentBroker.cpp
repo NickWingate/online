@@ -637,7 +637,8 @@ bool DocumentBroker::download(const std::shared_ptr<ClientSession>& session, con
         watermarkText = wopifileinfo->getWatermarkText();
         templateSource = wopifileinfo->getTemplateSource();
 
-        if (!wopifileinfo->getUserCanWrite() ||
+        if (CommandControl::FreemiumManager::isFreemiumReadOnlyUser() ||
+            !wopifileinfo->getUserCanWrite() ||
             COOLWSD::IsViewFileExtension(wopiStorage->getFileExtension()))
         {
             LOG_DBG("Setting the session as readonly");
@@ -754,6 +755,7 @@ bool DocumentBroker::download(const std::shared_ptr<ClientSession>& session, con
 #ifdef ENABLE_FREEMIUM
     Object::Ptr freemiumInfo = new Object();
     freemiumInfo->set("IsFreemiumUser", CommandControl::FreemiumManager::isFreemiumUser());
+    freemiumInfo->set("IsFreemiumReadOnly", CommandControl::FreemiumManager::isFreemiumReadOnly());
 
     // Poco:Dynamic:Var does not support std::unordred_set so converted to std::vector
     std::vector<std::string> freemiumDenyList(CommandControl::FreemiumManager::getFreemiumDenyList().begin(),
@@ -1619,7 +1621,7 @@ void DocumentBroker::handleUploadToStorageResponse(const StorageBase::UploadResu
         LOG_ERR("PutFile says that Document changed in storage");
         _documentChangedInStorage = true;
         const std::string message
-            = isModified() ? "error: cmd=storage kind=documentconflict" : "close: documentconflict";
+            = isPossiblyModified() ? "error: cmd=storage kind=documentconflict" : "close: documentconflict";
 
         broadcastMessage(message);
         broadcastSaveResult(false, "Conflict: Document changed in storage",
@@ -1924,9 +1926,6 @@ std::size_t DocumentBroker::addSessionInternal(const std::shared_ptr<ClientSessi
 #if !MOBILEAPP
     // Tell the admin console about this new doc
     std::string wopiHost = _storage->getUri().Poco::URI::getHost();
-    if (wopiHost.std::string::empty()) {
-        wopiHost = "";
-    }
     Admin::instance().addDoc(_docKey, getPid(), getFilename(), id, session->getUserName(),
                              session->getUserId(), _childProcess->getSMapsFD(), wopiHost);
     Admin::instance().setDocWopiDownloadDuration(_docKey, _wopiDownloadDuration);

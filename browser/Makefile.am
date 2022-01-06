@@ -143,6 +143,7 @@ COOL_CSS_LST =\
 	$(srcdir)/css/notebookbar.css \
 	$(srcdir)/css/jssidebar.css \
 	$(srcdir)/css/override-vex.css \
+	$(srcdir)/css/override-smartmenus.css \
 	$(srcdir)/css/jquery-ui-lightness.css
 
 if ENABLE_FEEDBACK
@@ -583,8 +584,13 @@ $(DIST_FOLDER)/welcome/%.html: $(srcdir)/welcome/%.html
 		`ln -sf $(abs_srcdir)/$< $@`; \
 	fi
 
+
+if ENABLE_DEBUG
+SourceMap=--allowJs true --sourceMap true --inlineSources true
+endif
+
 tscompile.done: $(COOL_JS_SRC) $(COOL_TS_SRC)
-	$(builddir)/node_modules/typescript/bin/tsc --typeRoots $(builddir)/node_modules/@types --outDir $(DIST_FOLDER)/src --rootDir $(srcdir)/src --checkJs false --project $(srcdir)/tsconfig.json
+	$(builddir)/node_modules/typescript/bin/tsc --typeRoots $(builddir)/node_modules/@types --outDir $(DIST_FOLDER)/src --rootDir $(srcdir)/src --checkJs false --project $(srcdir)/tsconfig.json $(SourceMap)
 	@touch $@
 
 $(COOL_TS_JS_DST): tscompile.done

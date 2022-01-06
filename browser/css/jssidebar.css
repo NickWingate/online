@@ -21,7 +21,7 @@
 .sidebar .spinfieldcontainer input {
 	width: 85px;
 	border: 1px solid var(--gray-color);
-	border-radius: 4px;
+	border-radius: var(--border-radius);
 	height: 28px;
 	padding-left: 4px;
 	position: relative;
@@ -104,6 +104,21 @@
 	justify-content: flex-end;
 }
 
+#ShadowPropertyPanel div#table-grid3 table#grid3 td:nth-child(1) {
+	justify-content: flex-start;
+}
+
+#FIELD_TRANSPARENCY {
+	height: 0;
+	position: relative;
+	bottom: 22px;
+}
+
+#transparency_label {
+	position: relative;
+	top: 12px;
+}
+
 #table-box4.sidebar.jsdialog.vertical {
 	width: auto;
 }
@@ -121,8 +136,34 @@ div#thousandseparator.checkbutton.jsdialog.sidebar {
 	display: flex;
 	justify-content: flex-end;
 }
+
 .sidebar.ui-drawing-area {
 	max-width: 290px;
+}
+
+div#decimalplaces {
+	text-align: right;
+}
+
+div#numberformatcombobox.jsdialog.sidebar.ui-listbox-container {
+	position: relative;
+	left: 2px;
+}
+
+div#leadingzeroes.jsdialog.sidebar.spinfieldcontainer {
+	text-align: right;
+	position: relative;
+	right: 4px;
+}
+
+p#decimalplaceslabel.jsdialog.sidebar.ui-text,
+p#denominatorplaceslabel.jsdialog.sidebar.ui-text {
+	position: absolute;
+}
+
+div#box2.row.jsdialog.sidebar > .sidebar.jsdialog.row > .sidebar.jsdialog.cell,
+div#box5.row.jsdialog.sidebar > .sidebar.jsdialog.cell {
+	padding: 0 14px 0 0;
 }
 
 .sidebar.ui-expander-label {
@@ -191,7 +232,7 @@ td.jsdialog .jsdialog.cell.sidebar {
 	background-color: transparent;
 	border: 2px solid transparent;
 	color: var(--gray-light-txt--color);
-	border-radius: 4px;
+	border-radius: var(--border-radius);
 }
 /* selected */
 .hasnotebookbar .ui-content.unotoolbutton.selected.has-label,
@@ -199,9 +240,9 @@ td.jsdialog .jsdialog.cell.sidebar {
 .hasnotebookbar .ui-content.unotoolbutton.selected:not(.has-label):not(.inline),
 .sidebar.unotoolbutton.selected {
 	background-color: var(--gray-light-bg-color);
-	border: 2px solid var(--gray-light-bg-color);
+	border: 2px solid transparent;
 	color: var(--gray-light-txt--color);
-	border-radius: 4px;
+	border-radius: var(--border-radius);
 }
 /* selected hover */
 .hasnotebookbar .ui-content.unotoolbutton.selected:hover,
@@ -214,7 +255,7 @@ td.jsdialog .jsdialog.cell.sidebar {
 #table-textorientbox.sidebar .jsdialog .radiobutton:hover {
 	outline: 1px solid var(--gray-light-txt--color);
 	color: var(--gray-light-txt--color);
-	border-radius: 4px;
+	border-radius: var(--border-radius);
 }
 
 .sidebar #font select,
@@ -273,11 +314,6 @@ td.jsdialog .jsdialog.cell.sidebar {
 	width: 160px;
 	position: relative;
 	left: -7px;
-}
-
-#table-verticalalignment {
-	position: relative;
-	top: 6px;
 }
 
 #LB_SHADOW_COLOR, #LB_GLOW_COLOR {
