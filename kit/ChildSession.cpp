@@ -56,7 +56,6 @@ using Poco::URI;
 using namespace COOLProtocol;
 
 bool ChildSession::NoCapsForKit = false;
-UnoCommandsRecorder ChildSession::unoCommandsRecorder;
 
 namespace {
 
@@ -88,7 +87,6 @@ std::string formatUnoCommandInfo(const std::string& sessionId, const std::string
     unoCommandInfo.append(Util::eliminatePrefix(unoCommand,".uno:"));
     unoCommandInfo.append(" - ");
     unoCommandInfo.append(recorded_time);
-    unoCommandInfo.push_back('\n');
 
     return unoCommandInfo;
 }
@@ -109,7 +107,6 @@ ChildSession::ChildSession(
     _isDocLoaded(false),
     _copyToClipboard(false)
 {
-    SigUtil::registerUnoCommandInfoHandler(&ChildSession::dumpRecordedUnoCommands);
     LOG_INF("ChildSession ctor [" << getName() << "]. JailRoot: [" << _jailRoot << "].");
 }
 
@@ -710,6 +707,8 @@ bool ChildSession::loadDocument(const char * /*buffer*/, int /*length*/, const S
     }
 #endif
 
+    SigUtil::addActivity("load view: " + getId() + " doc: " + getJailedFilePathAnonym());
+
     const bool loaded = _docManager->onLoad(getId(), getJailedFilePathAnonym(), renderOpts);
     if (!loaded || _viewId < 0)
     {
@@ -869,52 +868,6 @@ bool ChildSession::getStatus(const char* /*buffer*/, int /*length*/)
     }
 
     return sendTextFrame("status: " + status);
-}
-
-void ChildSession::dumpRecordedUnoCommands()
-{
-    std::atomic<char*>* recordedCommands = unoCommandsRecorder.getRecordedCommands();
-
-    Log::signalLog("List of last UNO commands:\n");
-
-    for (int i = 0; i < unoCommandsRecorder.NUM_UNO_COMMANDS; i++)
-    {
-        // Set the slot to null to prevent other threads from deleting
-        // the command in future( while recording new command)
-        char * unoCommandInfo = recordedCommands[i].exchange(nullptr);
-
-        // If the slot is already empty or signal handlers reentry
-        if(unoCommandInfo != nullptr)
-            Log::signalLog(unoCommandInfo);
-    }
-}
-
-UnoCommandsRecorder::UnoCommandsRecorder() :
-    _currentpos(0)
-{
-    for (int i = 0; i < NUM_UNO_COMMANDS; i++)
-    {
-        _unocommands[i].store(nullptr);
-    }
-}
-
-void UnoCommandsRecorder::addUnoCommandInfo(const std::string& unoCommandInfo)
-{
-    // Create a new C string on heap with the contents of unoCommandInfo
-    char* command = new char[unoCommandInfo.length()+1];
-    strncpy(command, unoCommandInfo.c_str(), unoCommandInfo.length()+1);
-
-    unsigned long long currentIndex = _currentpos.fetch_add(1);
-
-    char* oldCommand = _unocommands[currentIndex % NUM_UNO_COMMANDS].exchange(command);
-
-    delete[] oldCommand;
-
-}
-
-std::atomic<char*>* UnoCommandsRecorder::getRecordedCommands()
-{
-    return _unocommands;
 }
 
 namespace
@@ -1165,6 +1118,8 @@ bool ChildSession::getTextSelection(const char* /*buffer*/, int /*length*/, cons
         return false;
     }
 
+    SigUtil::addActivity("getTextSelection");
+
     if (getLOKitDocument()->getDocumentType() != LOK_DOCTYPE_TEXT &&
         getLOKitDocument()->getDocumentType() != LOK_DOCTYPE_SPREADSHEET)
     {
@@ -1213,6 +1168,8 @@ bool ChildSession::getClipboard(const char* /*buffer*/, int /*length*/, const St
         pMimeTypes[0] = token.c_str();
         pMimeTypes[1] = nullptr;
     }
+
+    SigUtil::addActivity("getClipboard");
 
     bool success = false;
     getLOKitDocument()->setView(_viewId);
@@ -1264,6 +1221,8 @@ bool ChildSession::setClipboard(const char* buffer, int length, const StringVect
     try {
         ClipboardData data;
         Poco::MemoryInputStream stream(buffer, length);
+
+        SigUtil::addActivity("setClipboard " + std::to_string(length) + " bytes");
 
         std::string command; // skip command
         std::getline(stream, command, '\n');
@@ -1365,6 +1324,8 @@ bool ChildSession::insertFile(const char* /*buffer*/, int /*length*/, const Stri
         return false;
     }
 #endif
+
+    SigUtil::addActivity("insertFile " + type);
 
     if (type == "graphic" || type == "graphicurl" || type == "selectbackground")
     {
@@ -1742,7 +1703,7 @@ bool ChildSession::unoCommand(const char* /*buffer*/, int /*length*/, const Stri
         return false;
     }
 
-    unoCommandsRecorder.addUnoCommandInfo(formatUnoCommandInfo(getId(), tokens[1]));
+    SigUtil::addActivity(formatUnoCommandInfo(getId(), tokens[1]));
 
     // we need to get LOK_CALLBACK_UNO_COMMAND_RESULT callback when saving
     const bool bNotify = (tokens.equals(1, ".uno:Save") ||
