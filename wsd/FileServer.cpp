@@ -490,6 +490,22 @@ void FileServerRequestHandler::handleRequest(const HTTPRequest& request,
         noCache = true;
 #endif
         Poco::Net::HTTPResponse response;
+
+        const auto& config = Application::instance().config();
+
+        // HSTS hardening. Disabled in debug builds.
+#if !ENABLE_DEBUG
+        if (COOLWSD::isSSLEnabled() || COOLWSD::isSSLTermination())
+        {
+            if (config.getBool("ssl.sts.enabled", false))
+            {
+                const auto maxAge = config.getInt("ssl.sts.max_age", 31536000); // Default 1 year.
+                response.add("Strict-Transport-Security",
+                             "max-age=" + std::to_string(maxAge) + "; includeSubDomains");
+            }
+        }
+#endif
+
         Poco::URI requestUri(request.getURI());
         LOG_TRC("Fileserver request: " << requestUri.toString());
         requestUri.normalize(); // avoid .'s and ..'s
@@ -507,7 +523,6 @@ void FileServerRequestHandler::handleRequest(const HTTPRequest& request,
 
         std::string relPath = getRequestPathname(request);
         std::string endPoint = requestSegments[requestSegments.size() - 1];
-        const auto& config = Application::instance().config();
 
         static std::string etagString = "\"" COOLWSD_VERSION_HASH +
             config.getString("ver_suffix", "") + "\"";
@@ -870,6 +885,24 @@ constexpr char BRANDING_UNSUPPORTED[] = "branding-unsupported";
 #endif
 
 namespace {
+    bool isRtlLanguage(std::string language)
+    {
+        if (language.rfind("ar", 0) == 0 ||
+            language.rfind("arc", 0) == 0 ||
+            language.rfind("dv", 0) == 0 ||
+            language.rfind("fa", 0) == 0 ||
+            language.rfind("ha", 0) == 0 ||
+            language.rfind("he", 0) == 0 ||
+            language.rfind("khw", 0) == 0 ||
+            language.rfind("ks", 0) == 0 ||
+            language.rfind("ku", 0) == 0 ||
+            language.rfind("ps", 0) == 0 ||
+            language.rfind("ur", 0) == 0 ||
+            language.rfind("yi", 0) == 0)
+            return true;
+
+        return false;
+    }
 }
 
 void FileServerRequestHandler::preprocessFile(const HTTPRequest& request,
@@ -1016,6 +1049,11 @@ void FileServerRequestHandler::preprocessFile(const HTTPRequest& request,
         userInterfaceMode = "notebookbar";
 
     Poco::replaceInPlace(preprocess, std::string("%USER_INTERFACE_MODE%"), userInterfaceMode);
+
+    std::string uiRtlSettings;
+    if (isRtlLanguage(requestDetails.getParam("lang")))
+        uiRtlSettings = " dir=\"rtl\" ";
+    Poco::replaceInPlace(preprocess, std::string("%UI_RTL_SETTINGS%"), uiRtlSettings);
 
     std::string enableMacrosExecution = stringifyBoolFromConfig(config, "security.enable_macros_execution", false);
     Poco::replaceInPlace(preprocess, std::string("%ENABLE_MACROS_EXECUTION%"), enableMacrosExecution);

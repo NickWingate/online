@@ -39,6 +39,7 @@ declare var app: any;
 			If none of them exists, canvas's top will be used as anchor.
 			Canvas's left will be used as horizontal anchor.
 		2- [["column header", "bottom", "ruler", "bottom", "top"], ["row header", "right", "left"]]
+		It is also possible to position a section's right edge anchor to another section's left edge by using a special option '-left'.
 
 	position: [0, 0] | [10, 50] | [x, y] // Related to anchor. Example 'bottom right': P(0, 0) is bottom right etc. myTopLeft is updated according to position and anchor.
 
@@ -160,6 +161,7 @@ class CanvasSectionObject {
 	position: Array<number> = new Array(0);
 	isCollapsed: boolean = false;
 	size: Array<number> = new Array(0);
+	origSizeHint: undefined | Array<number> = undefined; // This is used to preserve the original size provided on construct.
 	expand: Array<string> = new Array(0);
 	isLocated: boolean = false; // location and size of the section computed yet ?
 	processingOrder: number = null;
@@ -255,6 +257,9 @@ class CanvasSectionObject {
 
 	/// Document objects only. Do not implement this. This function is added by section container.
 	setPosition: (x: number, y: number) => void;
+
+	/// Do not implement this. This function is added by section container. This returns if Calc document is in RTL mode
+	isCalcRTL: () => boolean;
 
 	constructor (options: any) {
 		this.name = options.name;
@@ -1539,23 +1544,35 @@ class CanvasSectionContainer {
 						return 0;
 					}
 					else {
-						if (targetEdge === 'top') // eslint-disable-line no-lonely-if
+						if (targetEdge === 'top') { // eslint-disable-line no-lonely-if
 							return targetSection.myTopLeft[1] - app.roundedDpiScale;
-						else if (targetEdge === 'bottom')
+						}
+						else if (targetEdge === 'bottom') {
 							return targetSection.myTopLeft[1] + targetSection.size[1] + app.roundedDpiScale;
-						else if (targetEdge === 'left')
+						}
+						else if (targetEdge === 'left') {
 							return targetSection.myTopLeft[0] - app.roundedDpiScale;
-						else if (targetEdge === 'right')
+						}
+						else if (targetEdge === 'right') {
 							return targetSection.myTopLeft[0] + targetSection.size[0] + app.roundedDpiScale;
+						}
+						else if (targetEdge === '-left') {
+							if (section.expand[0] === 'left' && section.origSizeHint) {
+								section.size[0] = section.origSizeHint[0];
+							}
+							return targetSection.myTopLeft[0] - section.size[0];
+						}
 					}
 				}
 				else {
 					// No target section is found. Use fallback.
 					var anchor: string = section.anchor[index][count - 1];
-					if (index === 0)
+					if (index === 0) {
 						return anchor === 'top' ? section.position[1]: (this.bottom - (section.position[1] + section.size[1]));
-					else
+					}
+					else {
 						return anchor === 'left' ? section.position[0]: (this.right - (section.position[0] + section.size[0]));
+					}
 				}
 			}
 		}
@@ -1584,17 +1601,24 @@ class CanvasSectionContainer {
 	}
 
 	private locateSections () {
-		// Reset some values.
+
 		for (var i: number = 0; i < this.sections.length; i++) {
-			this.sections[i].isLocated = false;
-			this.sections[i].myTopLeft = null;
+			const section = this.sections[i];
+			// Reset some values.
+			section.isLocated = false;
+			section.myTopLeft = null;
+
+			// Preserve the original size hint
+			if (typeof section.origSizeHint === 'undefined') {
+				section.origSizeHint = [...section.size];
+			}
 		}
 
 		this.documentAnchor = null;
 		this.windowSectionList = [];
 
 		for (var i: number = 0; i < this.sections.length; i++) {
-			var section: CanvasSectionObject = this.sections[i];
+			const section: CanvasSectionObject = this.sections[i];
 
 			if (section.documentObject === true) { // "Document anchor" section should be processed before "document object" sections.
 				if (section.size && section.position) {
@@ -1863,10 +1887,21 @@ class CanvasSectionContainer {
 
 		section.getTestDiv = function (): HTMLDivElement {
 			var element: HTMLDivElement = <HTMLDivElement>document.getElementById('test-div-' + this.name);
-			if (element)
+			if (element) {
 				return element;
-			else
+			}
+			else {
 				return null;
+			}
+		};
+
+		section.isCalcRTL = function (): boolean {
+			const docLayer = section.sectionProperties.docLayer;
+			if (docLayer && docLayer.isCalcRTL()) {
+				return true;
+			}
+
+			return false;
 		};
 
 		// Only for document objects.
@@ -1874,7 +1909,16 @@ class CanvasSectionContainer {
 			section.setPosition = function (x: number, y: number) {
 				x = Math.round(x);
 				y = Math.round(y);
-				section.myTopLeft[0] = section.containerObject.documentAnchor[0] + x - section.containerObject.documentTopLeft[0];
+				let sectionXcoord = x - section.containerObject.documentTopLeft[0];
+				if (section.isCalcRTL()) {
+					console.log('DEBUG: setPosition: docSize = ' + section.containerObject.getDocumentSize()[0]);
+					// the document coordinates are not always in sync(fixing that is non-trivial!), so use the latest from map.
+					const docLayer = section.sectionProperties.docLayer;
+					const docSize = docLayer._map.getPixelBoundsCore().getSize();
+					sectionXcoord = docSize.x - sectionXcoord - section.size[0];
+				}
+
+				section.myTopLeft[0] = section.containerObject.documentAnchor[0] + sectionXcoord;
 				section.myTopLeft[1] = section.containerObject.documentAnchor[1] + y - section.containerObject.documentTopLeft[1];
 				section.position[0] = x;
 				section.position[1] = y;

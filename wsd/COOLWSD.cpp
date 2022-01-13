@@ -6,6 +6,7 @@
  */
 
 #include <config.h>
+#include <stdexcept>
 #include "COOLWSD.hpp"
 #include "ProofKey.hpp"
 
@@ -1106,6 +1107,8 @@ void COOLWSD::innerInitialize(Application& self)
             { "ssl.hpkp.report_uri[@enable]", "false" },
             { "ssl.hpkp[@enable]", "false" },
             { "ssl.hpkp[@report_only]", "false" },
+            { "ssl.sts.enabled", "false" },
+            { "ssl.sts.max_age", "31536000" },
             { "ssl.key_file_path", COOLWSD_CONFIGDIR "/key.pem" },
             { "ssl.termination", "true" },
             { "storage.filesystem[@allow]", "false" },
@@ -3708,6 +3711,7 @@ private:
                 else
                 {
                     LOG_WRN("Failed to create Client Session with id [" << _id << "] on docKey [" << docKey << "].");
+                    throw std::runtime_error("Cannot create client session for doc " + docKey);
                 }
             }
             else
@@ -4485,11 +4489,16 @@ int COOLWSD::innerMain()
     JailUtil::cleanupJails(ChildRoot);
 #endif // !MOBILEAPP
 
+    int returnValue = EX_OK;
+    UnitWSD::get().returnValue(returnValue);
+
+    LOG_INF("Process [loolwsd] finished with exit status: " << returnValue);
+
     // At least on centos7, Poco deadlocks while
     // cleaning up its SSL context singleton.
-    Util::forcedExit(EX_OK);
+    Util::forcedExit(returnValue);
 
-    return EX_OK;
+    return returnValue;
 }
 
 void COOLWSD::cleanup()

@@ -288,6 +288,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 		var spinfield = L.DomUtil.create('input', builder.options.cssClass + ' spinfield', div);
 		spinfield.type = 'number';
+		spinfield.dir = 'auto';
 		controls['spinfield'] = spinfield;
 
 		if (data.unit) {
@@ -592,6 +593,9 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			icon.src = iconURL;
 			icon.alt = '';
 			titleClass = 'menu-entry-with-icon';
+			icon.addEventListener('error', function() {
+				icon.style.display = 'none';
+			});
 		}
 		var titleSpan = L.DomUtil.create('span', titleClass, leftDiv);
 
@@ -1329,6 +1333,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		var edit = L.DomUtil.create('input', 'ui-edit ' + builder.options.cssClass, parentContainer);
 		edit.value = builder._cleanText(data.text);
 		edit.id = data.id;
+		edit.dir = 'auto';
 
 		if (data.enabled === 'false' || data.enabled === false)
 			$(edit).prop('disabled', true);

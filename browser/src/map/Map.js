@@ -989,6 +989,18 @@ L.Map = L.Evented.extend({
 		return this.options.crs.pointToLatLng(L.point(point), zoom);
 	},
 
+	/**
+	 * Get LatLng coordinates after negating the X cartesian-coordinate.
+	 * This is useful in Calc RTL mode as mouse events have regular document
+	 * coordinates(latlng) but draw-objects(shapes) have negative document
+	 * X coordinates.
+	 */
+	negateLatLng: function (latlng, zoom) { // (LatLng[, Number]) -> LatLng
+		var docPos = this.project(latlng, zoom);
+		docPos.x = -docPos.x;
+		return this.unproject(docPos, zoom);
+	},
+
 	layerPointToLatLng: function (point) { // (Point)
 		var projectedPoint = L.point(point).add(this.getPixelOrigin());
 		return this.unproject(projectedPoint);
@@ -1016,7 +1028,13 @@ L.Map = L.Evented.extend({
 		var pixelOrigin = this.getPixelOrigin();
 		var mapPanePos = this._getMapPanePos();
 		var result = L.point(point).clone();
-		if (point.x <= splitPos.x) {
+		var pointX = point.x;
+		if (this._docLayer.isCalcRTL()) {
+			pointX = this._container.clientWidth - pointX;
+			result.x = pointX;
+		}
+
+		if (pointX <= splitPos.x) {
 			result.x -= pixelOrigin.x;
 		}
 		else {
@@ -1322,7 +1340,11 @@ L.Map = L.Evented.extend({
 					}
 					if (width > 0 && height > 0 && sizeChanged) {
 						console.log('_onResize: container width: ' + width + ', container height: ' + height + ', _calcInputBar width: ' + this.dialog._calcInputBar.width);
-						app.socket.sendMessage('resizewindow ' + id + ' size=' + width + ',' + height);
+						if (width != this.dialog._calcInputbarContainerWidth || height != this.dialog._calcInputbarContainerHeight) {
+							app.socket.sendMessage('resizewindow ' + id + ' size=' + width + ',' + height);
+							this.dialog._calcInputbarContainerWidth = width;
+							this.dialog._calcInputbarContainerHeight = height;
+						}
 					}
 				}
 			}

@@ -256,7 +256,10 @@ void DocumentBroker::pollThread()
     // Main polling loop goodness.
     while (!_stop && _poll->continuePolling() && !SigUtil::getTerminationFlag())
     {
-        _poll->poll(SocketPoll::DefaultPollTimeoutMicroS);
+        // Poll more frequently while unloading to cleanup sooner.
+        const bool unloading = isMarkedToDestroy() || _docState.isUnloadRequested();
+        _poll->poll(unloading ? SocketPoll::DefaultPollTimeoutMicroS / 8
+                              : SocketPoll::DefaultPollTimeoutMicroS);
 
 #if !MOBILEAPP
         const auto now = std::chrono::steady_clock::now();
@@ -419,32 +422,28 @@ void DocumentBroker::pollThread()
         // Remove idle documents after 1 hour.
         if (isLoaded() && getIdleTimeSecs() >= IdleDocTimeoutSecs)
         {
-            // Don't hammer on saving.
-            if (_saveManager.timeSinceLastSaveRequest() >= std::chrono::seconds(5))
-            {
-                // Stop if there is nothing to save.
-                LOG_INF("Autosaving idle DocumentBroker for docKey [" << getDocKey()
-                                                                      << "] to kill.");
-                if (!autoSave(isPossiblyModified()))
-                {
-                    LOG_INF("Terminating idle DocumentBroker for docKey [" << getDocKey() << "].");
-                    stop("idle");
-                }
-            }
+            autoSaveAndStop("idle");
         }
         else
 #endif
         if (_sessions.empty() && (isLoaded() || _docState.isMarkedToDestroy()))
         {
-            if (_saveManager.isSaving() || isAsyncSaveInProgress())
+            if (!isLoaded())
+            {
+                // Nothing to do; no sessions, not loaded, marked to destroy.
+                stop("dead");
+            }
+            else if (_saveManager.isSaving() || isAsyncSaveInProgress())
             {
                 LOG_DBG("Don't terminate dead DocumentBroker: async saving in progress for docKey [" << getDocKey() << "].");
                 continue;
             }
 
-            // If all sessions have been removed, no reason to linger.
-            LOG_INF("Terminating dead DocumentBroker for docKey [" << getDocKey() << "].");
-            stop("dead");
+            autoSaveAndStop("dead");
+        }
+        else if (_docState.isUnloadRequested())
+        {
+            autoSaveAndStop("unloading");
         }
     }
 
@@ -457,6 +456,8 @@ void DocumentBroker::pollThread()
         std::stringstream state;
         dumpState(state);
         LOG_WRN("DocumentBroker stopping although flagged as modified " << state.str());
+        if (UnitWSD::isUnitTesting())
+            UnitWSD::get().fail("Unsaved data detected while exiting DocBroker [" + _docKey + ']');
     }
 
     // Flush socket data first.
@@ -517,10 +518,6 @@ DocumentBroker::~DocumentBroker()
 {
     assertCorrectThread();
 
-#if !MOBILEAPP
-    Admin::instance().rmDoc(_docKey);
-#endif
-
     LOG_INF("~DocumentBroker [" << _docKey <<
             "] destroyed with " << _sessions.size() << " sessions left.");
 
@@ -528,11 +525,18 @@ DocumentBroker::~DocumentBroker()
     _poll->joinThread();
 
     if (!_sessions.empty())
-        LOG_WRN("DocumentBroker [" << _docKey << "] still has unremoved sessions.");
+        LOG_WRN("Destroying DocumentBroker [" << _docKey << "] while having unremoved sessions.");
 
     // Need to first make sure the child exited, socket closed,
     // and thread finished before we are destroyed.
     _childProcess.reset();
+
+    UnitWSD::get().onDocBrokerDestroy(_docKey);
+
+#if !MOBILEAPP
+    // Remove from the admin last, to avoid racing the next test.
+    Admin::instance().rmDoc(_docKey);
+#endif
 }
 
 void DocumentBroker::joinThread()
@@ -1100,9 +1104,16 @@ DocumentBroker::NeedToUpload DocumentBroker::needToUploadToStorage() const
     // Get the modified-time of the file on disk.
     const auto st = FileUtil::Stat(_storage->getRootFilePathUploading());
     const std::chrono::system_clock::time_point currentModifiedTime = st.modifiedTimepoint();
+    const std::chrono::system_clock::time_point lastModifiedTime =
+        _storageManager.getLastUploadedFileModifiedTime();
+
+    LOG_TRC("File to upload to storage ["
+            << _storage->getRootFilePathUploading() << "] was modified at " << currentModifiedTime
+            << " and the last uploaded file was modified at " << lastModifiedTime << ", which are "
+            << (currentModifiedTime == lastModifiedTime ? "identical." : "different."));
 
     // Compare to the last uploaded file's modified-time.
-    if (currentModifiedTime != _storageManager.getLastUploadedFileModifiedTime())
+    if (currentModifiedTime != lastModifiedTime)
         return NeedToUpload::Yes; // Timestamp changed, upload.
 
     return NeedToUpload::No; // No reason to upload, seems up-to-date.
@@ -1146,6 +1157,12 @@ void DocumentBroker::handleSaveResponse(const std::string& sessionId, bool succe
     // Record that we got a response to avoid timing out on saving.
     _saveManager.setLastSaveResult(success || result == "unmodified");
 
+    checkAndUploadToStorage(sessionId, success, result);
+}
+
+void DocumentBroker::checkAndUploadToStorage(const std::string& sessionId, bool success,
+                                             const std::string& result)
+{
     // See if we have anything to upload.
     NeedToUpload needToUploadState = needToUploadToStorage();
 
@@ -1181,6 +1198,15 @@ void DocumentBroker::handleSaveResponse(const std::string& sessionId, bool succe
         break;
     }
 
+    if (_docState.isUnloadRequested() && isPossiblyModified())
+    {
+        // We are unloading but have possible modifications. Save again (done in poll).
+        LOG_DBG("Document [" << getDocKey()
+                             << "] is unloading, but was possibly modified during saving. Skipping "
+                                "upload to save again before unloading.");
+        return;
+    }
+
     if (needToUploadState != NeedToUpload::No)
     {
         uploadToStorage(sessionId, success, result,
@@ -1200,7 +1226,7 @@ void DocumentBroker::handleSaveResponse(const std::string& sessionId, bool succe
             LOG_DBG("Stopping after saving because "
                     << (_sessions.empty() ? "there are no active sessions left."
                                           : "the document is marked to destroy."));
-            _stop = true;
+            stop("unloading");
         }
     }
 }
@@ -1550,14 +1576,14 @@ void DocumentBroker::handleUploadToStorageResponse(const StorageBase::UploadResu
             LOG_TRC("Unload requested after uploading, marking to destroy.");
         }
 
-        // If marked to destroy, then this was the last session.
-        if (_docState.isMarkedToDestroy() || _sessions.empty())
+        // If marked to destroy, and there are no late-arriving modifications, then stop.
+        if ((_docState.isMarkedToDestroy() || _sessions.empty()) && !isPossiblyModified())
         {
             // Stop so we get cleaned up and removed.
             LOG_DBG("Stopping after uploading because "
                     << (_sessions.empty() ? "there are no active sessions left."
                                           : "the document is marked to destroy."));
-            _stop = true;
+            stop("unloading");
         }
 
         return;
@@ -1791,6 +1817,73 @@ bool DocumentBroker::autoSave(const bool force, const bool dontSaveIfUnmodified)
     return sent;
 }
 
+void DocumentBroker::autoSaveAndStop(const std::string& reason)
+{
+    LOG_TRC("autoSaveAndStop for docKey [" << getDocKey() << ']');
+
+    if (_saveManager.isSaving() || isAsyncSaveInProgress())
+    {
+        LOG_TRC("Async saving/uploading in progress for docKey [" << getDocKey() << ']');
+        return;
+    }
+
+    bool canStop = false;
+    if (needToUploadToStorage() == NeedToUpload::No)
+    {
+        // Here we don't check for the modified flag because it can come in
+        // very late, or not at all. We care that there is nothing to upload
+        // and the last save succeeded, possibly because there was no
+        // modifications, and there has been no activity since.
+        if (!haveActivityAfterSaveRequest() &&
+            _saveManager.lastSaveRequestTime() < _saveManager.lastSaveResponseTime() &&
+            _saveManager.lastSaveSuccessful())
+        {
+            // Nothing to upload and last save was successful; stop.
+            canStop = true;
+            LOG_TRC("autoSaveAndStop for docKey ["
+                    << getDocKey() << "]: no modifications since last successful save. Stopping.");
+        }
+        else if (!isPossiblyModified())
+        {
+            // Nothing to upload and no modifications; stop.
+            canStop = true;
+            LOG_TRC("autoSaveAndStop for docKey [" << getDocKey() << "]: not modified. Stopping.");
+        }
+    }
+
+    // Don't hammer on saving.
+    if (!canStop && _saveManager.timeSinceLastSaveRequest() >= std::chrono::seconds(1) &&
+        _saveManager.timeSinceLastSaveResponse() >= std::chrono::seconds(2))
+    {
+        // Stop if there is nothing to save.
+        LOG_INF("Autosaving " << reason << " DocumentBroker for docKey [" << getDocKey()
+                              << "] before terminating.");
+        if (!autoSave(isPossiblyModified()))
+        {
+            const std::string sessionId = getWriteableSessionId();
+            if (!sessionId.empty())
+            {
+                constexpr bool success = true;
+                std::string result;
+                checkAndUploadToStorage(sessionId, success, result);
+                if (isAsyncSaveInProgress())
+                {
+                    LOG_DBG("Uploading document before stopping.");
+                    return;
+                }
+            }
+        }
+    }
+
+    if (canStop)
+    {
+        // Nothing to save, nothing to upload, and no modifications. Stop.
+        LOG_INF("Nothing to save or upload. Terminating "
+                << reason << " DocumentBroker for docKey [" << getDocKey() << ']');
+        stop(reason);
+    }
+}
+
 bool DocumentBroker::sendUnoSave(const std::string& sessionId, bool dontTerminateEdit,
                                  bool dontSaveIfUnmodified, bool isAutosave, bool isExitSave,
                                  const std::string& extendedData)
@@ -1957,18 +2050,21 @@ std::size_t DocumentBroker::removeSession(const std::string& id)
         }
         std::shared_ptr<ClientSession> session = it->second;
 
-        const bool isLastSession = (_sessions.size() == 1);
+        const std::size_t activeSessionCount = countActiveSessions();
+        const bool isLastSession = (activeSessionCount == 1);
 
         const bool lastEditableSession = (!session->isReadOnly() || session->isAllowChangeComments()) && !haveAnotherEditableSession(id);
         static const bool dontSaveIfUnmodified = !COOLWSD::getConfigValue<bool>("per_document.always_save_on_exit", false);
 
-        LOG_INF("Removing session ["
-                << id << "] on docKey [" << _docKey << "]. Have " << _sessions.size()
-                << " sessions. IsReadOnly: " << session->isReadOnly()
-                << ", IsViewLoaded: " << session->isViewLoaded() << ", IsWaitDisconnected: "
-                << session->inWaitDisconnected() << ", MarkToDestroy: " << _docState.isMarkedToDestroy()
-                << ", LastEditableSession: " << lastEditableSession << ", DontSaveIfUnmodified: "
-                << dontSaveIfUnmodified << ", IsPossiblyModified: " << isPossiblyModified());
+        LOG_INF("Removing session [" << id << "] on docKey [" << _docKey << "]. Have "
+                                     << _sessions.size() << " sessions (" << activeSessionCount
+                                     << " active). IsReadOnly: " << session->isReadOnly()
+                                     << ", IsViewLoaded: " << session->isViewLoaded()
+                                     << ", IsWaitDisconnected: " << session->inWaitDisconnected()
+                                     << ", MarkToDestroy: " << _docState.isMarkedToDestroy()
+                                     << ", LastEditableSession: " << lastEditableSession
+                                     << ", DontSaveIfUnmodified: " << dontSaveIfUnmodified
+                                     << ", IsPossiblyModified: " << isPossiblyModified());
 
         // In theory, we almost could do this here:
 
@@ -2165,6 +2261,15 @@ std::shared_ptr<ClientSession> DocumentBroker::createNewClientSession(
 {
     try
     {
+        if (isMarkedToDestroy())
+        {
+            LOG_INF("DocumentBroker ["
+                    << getDocKey()
+                    << "] is marked to destroy and will not create new client sessions.");
+
+            return nullptr;
+        }
+
         _docState.resetUnloadRequested(); // We can't unload, if it was requested.
         LOG_TRC("Creating new session. Resetting UnloadRequested flag.");
 
@@ -2717,6 +2822,22 @@ bool DocumentBroker::haveAnotherEditableSession(const std::string& id) const
     return false;
 }
 
+std::size_t DocumentBroker::countActiveSessions() const
+{
+    assertCorrectThread();
+
+    std::size_t count = 0;
+    for (const auto& it : _sessions)
+    {
+        if (it.second->isViewLoaded() && !it.second->inWaitDisconnected())
+        {
+            ++count;
+        }
+    }
+
+    return count;
+}
+
 void DocumentBroker::setModified(const bool value)
 {
 #if !MOBILEAPP
@@ -2735,7 +2856,7 @@ void DocumentBroker::setModified(const bool value)
         _storage->setUserModified(value);
     }
 
-    LOG_TRC("Modified state set to " << value << " for Doc [" << _docId << ']');
+    LOG_DBG("Modified state set to " << value << " for Doc [" << _docId << ']');
     _isModified = value;
 }
 
@@ -3229,6 +3350,7 @@ void DocumentBroker::dumpState(std::ostream& os)
     os << "\n  doc id: " << _docId;
     os << "\n  num sessions: " << _sessions.size();
     os << "\n  thread start: " << Util::getSteadyClockAsString(_threadStart);
+    os << "\n  possibly-modified: " << isPossiblyModified();
     os << "\n  doc state: " << DocumentState::toString(_docState.status());
     os << "\n  doc activity: " << DocumentState::toString(_docState.activity());
     if (_docState.activity() == DocumentState::Activity::Rename)
@@ -3239,6 +3361,7 @@ void DocumentBroker::dumpState(std::ostream& os)
        << Util::getSteadyClockAsString(_saveManager.lastSaveRequestTime());
     os << "\n  last save response: "
        << Util::getSteadyClockAsString(_saveManager.lastSaveResponseTime());
+    os << "\n  last save successful: " << _saveManager.lastSaveSuccessful();
     os << "\n  last storage upload was successful: " << isLastStorageUploadSuccessful();
     os << "\n  last modified: " << Util::getHttpTime(_storageManager.getLastModifiedTime());
     os << "\n  file last modified: " << Util::getHttpTime(_saveManager.getLastModifiedTime());

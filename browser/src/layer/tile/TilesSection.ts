@@ -30,6 +30,8 @@ class TilesSection {
 	offscreenCanvases: Array<any> = new Array(0);
 	oscCtxs: Array<any> = new Array(0);
 
+	isCalcRTL: () => boolean;
+
 	constructor () {
 		this.name = L.CSections.Tiles.name;
 		// Below anchor list may be expanded. For example, Writer may have ruler section. Then ruler section should also be added here.
@@ -128,7 +130,23 @@ class TilesSection {
 		}
 	}
 
-	drawTileInPane (tile: any, tileBounds: any, paneBounds: any, paneOffset: any, canvasCtx: any, clearBackground: boolean) {
+	private beforeDraw(canvasCtx: CanvasRenderingContext2D): void {
+		const mirrorTile: boolean = this.isCalcRTL();
+		if (mirrorTile) {
+			canvasCtx.save();
+			canvasCtx.translate(this.size[0], 0);
+			canvasCtx.scale(-1, 1);
+		}
+	}
+
+	private afterDraw(canvasCtx: CanvasRenderingContext2D): void {
+		const mirrorTile: boolean = this.isCalcRTL();
+		if (mirrorTile) {
+			canvasCtx.restore();
+		}
+	}
+
+	drawTileInPane (tile: any, tileBounds: any, paneBounds: any, paneOffset: any, canvasCtx: CanvasRenderingContext2D, clearBackground: boolean) {
 		// intersect - to avoid state thrash through clipping
 		var crop = new L.Bounds(tileBounds.min, tileBounds.max);
 		crop.min.x = Math.max(paneBounds.min.x, tileBounds.min.x);
@@ -143,13 +161,17 @@ class TilesSection {
 			if (clearBackground || this.containerObject.isZoomChanged() || canvasCtx !== this.context) {
 				// Whole canvas is not cleared after zoom has changed, so clear it per tile as they arrive.
 				canvasCtx.fillStyle = this.containerObject.getClearColor();
+				this.beforeDraw(canvasCtx);
 				canvasCtx.fillRect(
 					crop.min.x - paneOffset.x,
 					crop.min.y - paneOffset.y,
 					cropWidth, cropHeight);
+				this.afterDraw(canvasCtx);
 				var gridSection = this.containerObject.getSectionWithName(L.CSections.CalcGrid.name);
 				gridSection.onDrawArea(crop, paneOffset, canvasCtx);
 			}
+
+			this.beforeDraw(canvasCtx);
 			canvasCtx.drawImage(tile.el,
 				crop.min.x - tileBounds.min.x,
 				crop.min.y - tileBounds.min.y,
@@ -157,12 +179,15 @@ class TilesSection {
 				crop.min.x - paneOffset.x,
 				crop.min.y - paneOffset.y,
 				cropWidth, cropHeight);
+			this.afterDraw(canvasCtx);
 		}
 
 		if (this.sectionProperties.docLayer._debug)
 		{
 			canvasCtx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+			this.beforeDraw(canvasCtx);
 			canvasCtx.strokeRect(tile.coords.x - paneBounds.min.x, tile.coords.y - paneBounds.min.y, 256, 256);
+			this.afterDraw(canvasCtx);
 		}
 	}
 
@@ -622,9 +647,7 @@ class TilesSection {
 			var destPosScaled = (bestZoomSrc == zoom) ? destPos : this.scalePosForZoom(destPos, bestZoomSrc, zoom);
 			var relScale = (bestZoomSrc == zoom) ? 1 : this.map.getZoomScale(bestZoomSrc, zoom);
 
-			var toScaleAbs = relScale * docLayer._tileSize * 15.0 / docLayer._tileWidthTwips;
-			toScaleAbs = docLayer._tileSize * 15.0 / Math.round(15.0 * docLayer._tileSize / toScaleAbs);
-
+			this.beforeDraw(canvasContext);
 			this.forEachTileInArea(docRangeScaled, bestZoomSrc, part, ctx, function (tile: any, coords: any): boolean {
 				if (!tile || !tile.loaded || !docLayer._isValidTile(coords))
 					return false;
@@ -662,6 +685,7 @@ class TilesSection {
 
 				return true;
 			}); // end of forEachTileInArea call.
+			this.afterDraw(canvasContext);
 
 		} // End of pane bounds list loop.
 

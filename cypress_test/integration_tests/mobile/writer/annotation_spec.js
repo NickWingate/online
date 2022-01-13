@@ -4,10 +4,11 @@ var helper = require('../../common/helper');
 var mobileHelper = require('../../common/mobile_helper');
 
 describe.skip('Annotation tests.', function() {
-	var testFileName = 'annotation.odt';
+	var origTestFileName = 'annotation.odt';
+	var testFileName;
 
 	beforeEach(function() {
-		helper.beforeAll(testFileName, 'writer');
+		testFileName = helper.beforeAll(origTestFileName, 'writer');
 
 		// Click on edit button
 		mobileHelper.enableEditingMobile();
@@ -30,7 +31,7 @@ describe.skip('Annotation tests.', function() {
 			return originalFn(selector, options);
 		});
 
-		helper.beforeAll(testFileName, 'writer', true);
+		helper.reload(testFileName, 'writer', true);
 
 		mobileHelper.enableEditingMobile();
 

@@ -1394,6 +1394,9 @@ L.Control.Menubar = L.Control.extend({
 		}
 	},
 
+	_onMouseOut: function() {
+		$('.main-nav.hasnotebookbar').css('overflow', 'scroll hidden');
+	},
 	_checkedMenu: function(uno, item) {
 		var constChecked = 'lo-menu-item-checked';
 		var state = this._map['stateChangeHandler'].getItemValue(uno);
@@ -1406,7 +1409,12 @@ L.Control.Menubar = L.Control.extend({
 		}
 	},
 
+	_beforeHide: function() {
+		$('.main-nav.hasnotebookbar').css('overflow', 'scroll hidden');
+	},
+
 	_beforeShow: function(e, menu) {
+		$('.main-nav.hasnotebookbar').css('overflow', 'visible');
 		var self = e.data.self;
 		var items = $(menu).children().children('a').not('.has-submenu');
 		$(items).each(function() {

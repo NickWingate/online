@@ -234,9 +234,17 @@ class Cursor {
 			.disableScrollPropagation(this.container);
 	}
 
+	private transformX(xpos: number): number {
+		if (!this.map._docLayer.isCalcRTL()) {
+			return xpos;
+		}
+
+		return this.map._size.x - xpos;
+	}
+
 	private setPos(pos: cool.Point) {
 		this.container.style.top = pos.y + 'px';
-		this.container.style.left = pos.x + 'px';
+		this.container.style.left = this.transformX(pos.x) + 'px';
 		this.container.style.zIndex = this.zIndex + '';
 		// Restart blinking animation
 		if (this.blink) {

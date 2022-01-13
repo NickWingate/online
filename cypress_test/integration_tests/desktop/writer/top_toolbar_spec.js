@@ -6,10 +6,11 @@ var writerHelper = require('../../common/writer_helper');
 var mode = Cypress.env('USER_INTERFACE');
 
 describe('Top toolbar tests.', function() {
-	var testFileName = 'top_toolbar.odt';
+	var origTestFileName = 'top_toolbar.odt';
+	var testFileName;
 
 	beforeEach(function() {
-		helper.beforeAll(testFileName, 'writer');
+		testFileName = helper.beforeAll(origTestFileName, 'writer');
 
 		if (Cypress.env('INTEGRATION') === 'nextcloud') {
 			desktopHelper.showSidebarIfHidden();
@@ -61,13 +62,6 @@ describe('Top toolbar tests.', function() {
 
 
 	it('Apply font name.', function() {
-		//for notebookbar the tab button overlap on change font button so cypress fails
-		//below condition skips the test for notebookbar
-		//remove below condition after https://github.com/CollaboraOnline/online/issues/3935
-		//get solved
-		if (mode === 'notebookbar') {
-			return;
-		}
 		desktopHelper.actionOnSelector('fontName', (selector) => { cy.get(selector).click(); });
 
 		desktopHelper.selectFromListbox('Alef');
@@ -387,7 +381,7 @@ describe('Top toolbar tests.', function() {
 
 		desktopHelper.actionOnSelector('save', (selector) => { cy.get(selector).click(); });
 
-		helper.beforeAll(testFileName, 'writer', true);
+		helper.reload(testFileName, 'writer', true);
 
 		cy.wait(2000);
 

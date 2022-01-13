@@ -439,6 +439,12 @@ L.TileSectionManager = L.Class.extend({
 			scale = tsManager._zoomFrameScale;
 
 		var ctx = this.sectionProperties.tsManager._paintContext();
+		var isRTL = this.sectionProperties.docLayer.isLayoutRTL();
+		var sectionWidth = this.size[0];
+		var xTransform = function (xcoord) {
+			return isRTL ? sectionWidth - xcoord : xcoord;
+		};
+
 		for (var i = 0; i < ctx.paneBoundsList.length; ++i) {
 			// co-ordinates of this pane in core document pixels
 			var paneBounds = ctx.paneBoundsList[i];
@@ -476,8 +482,9 @@ L.TileSectionManager = L.Class.extend({
 				this.sectionProperties.docLayer.sheetGeometry._columns.forEachInCorePixelRange(
 					repaintArea.min.x, repaintArea.max.x,
 					function(pos) {
-						context.moveTo(Math.floor(scale * (pos - paneOffset.x)) - 0.5, Math.floor(scale * (miny - paneOffset.y)) + 0.5);
-						context.lineTo(Math.floor(scale * (pos - paneOffset.x)) - 0.5, Math.floor(scale * (maxy - paneOffset.y)) - 0.5);
+						var xcoord = xTransform(Math.floor(scale * (pos - paneOffset.x)) - 0.5);
+						context.moveTo(xcoord, Math.floor(scale * (miny - paneOffset.y)) + 0.5);
+						context.lineTo(xcoord, Math.floor(scale * (maxy - paneOffset.y)) - 0.5);
 						context.stroke();
 					});
 
@@ -485,8 +492,12 @@ L.TileSectionManager = L.Class.extend({
 				this.sectionProperties.docLayer.sheetGeometry._rows.forEachInCorePixelRange(
 					miny, maxy,
 					function(pos) {
-						context.moveTo(Math.floor(scale * (repaintArea.min.x - paneOffset.x)) + 0.5, Math.floor(scale * (pos - paneOffset.y)) - 0.5);
-						context.lineTo(Math.floor(scale * (repaintArea.max.x - paneOffset.x)) - 0.5, Math.floor(scale * (pos - paneOffset.y)) - 0.5);
+						context.moveTo(
+							xTransform(Math.floor(scale * (repaintArea.min.x - paneOffset.x)) + 0.5),
+							Math.floor(scale * (pos - paneOffset.y)) - 0.5);
+						context.lineTo(
+							xTransform(Math.floor(scale * (repaintArea.max.x - paneOffset.x)) - 0.5),
+							Math.floor(scale * (pos - paneOffset.y)) - 0.5);
 						context.stroke();
 					});
 
@@ -1974,19 +1985,24 @@ L.CanvasTileLayer = L.Layer.extend({
 	},
 
 	_extractAndSetGraphicSelection: function(messageJSON) {
-		var topLeftTwips = new L.Point(messageJSON[0], messageJSON[1]);
-		var offset = new L.Point(messageJSON[2], messageJSON[3]);
-		var bottomRightTwips = topLeftTwips.add(offset);
+		var calcRTL = this.isCalcRTL();
+		var signX =  calcRTL ? -1 : 1;
 		var hasExtraInfo = messageJSON.length > 5;
 		var hasGridOffset = false;
 		var extraInfo = null;
 		if (hasExtraInfo) {
 			extraInfo = messageJSON[5];
 			if (extraInfo.gridOffsetX || extraInfo.gridOffsetY) {
-				this._shapeGridOffset = new L.Point(parseInt(extraInfo.gridOffsetX), parseInt(extraInfo.gridOffsetY));
+				this._shapeGridOffset = new L.Point(signX * parseInt(extraInfo.gridOffsetX), parseInt(extraInfo.gridOffsetY));
 				hasGridOffset = true;
 			}
 		}
+
+		// Calc RTL: Negate positive X coordinates from core if grid offset is available.
+		signX = hasGridOffset && calcRTL ? -1 : 1;
+		var topLeftTwips = new L.Point(signX * messageJSON[0], messageJSON[1]);
+		var offset = new L.Point(signX * messageJSON[2], messageJSON[3]);
+		var bottomRightTwips = topLeftTwips.add(offset);
 
 		if (hasGridOffset) {
 			this._graphicSelectionTwips = new L.Bounds(topLeftTwips.add(this._shapeGridOffset), bottomRightTwips.add(this._shapeGridOffset));
@@ -3652,6 +3668,7 @@ L.CanvasTileLayer = L.Layer.extend({
 	_onGraphicMove: function (e) {
 		if (!e.pos) { return; }
 		var aPos = this._latLngToTwips(e.pos);
+		var calcRTL = this.isCalcRTL();
 		if (e.type === 'graphicmovestart') {
 			this._graphicMarker.isDragged = true;
 			this._graphicMarker.setVisible(true);
@@ -3700,8 +3717,17 @@ L.CanvasTileLayer = L.Layer.extend({
 				}
 			}
 			else {
-				var newPos = this._graphicSelectionTwips.min.add(deltaPos);
+				var newPos = new L.Point(
+					// Choose the logical left of the shape.
+					this._graphicSelectionTwips.min.x + deltaPos.x,
+					this._graphicSelectionTwips.min.y + deltaPos.y);
+
 				var size = this._graphicSelectionTwips.getSize();
+
+				if (calcRTL) {
+					// make x coordinate of newPos +ve
+					newPos.x = -newPos.x;
+				}
 
 				// try to keep shape inside document
 				if (newPos.x + size.x > this._docWidthTwips)
@@ -3716,6 +3742,11 @@ L.CanvasTileLayer = L.Layer.extend({
 
 				if (this.isCalc() && this.options.printTwipsMsgsEnabled) {
 					newPos = this.sheetGeometry.getPrintTwipsPointFromTile(newPos);
+				}
+
+				// restore the sign(negative) of x coordinate.
+				if (calcRTL) {
+					newPos.x = -newPos.x;
 				}
 
 				param = {
@@ -3740,9 +3771,11 @@ L.CanvasTileLayer = L.Layer.extend({
 		if (!e.pos) { return; }
 		if (!e.handleId) { return; }
 
+		var calcRTL = this.isCalcRTL();
 		var aPos = this._latLngToTwips(e.pos);
 		var selMin = this._graphicSelectionTwips.min;
 		var selMax = this._graphicSelectionTwips.max;
+
 		var handleId = e.handleId;
 
 		if (e.type === 'scalestart') {
@@ -3770,7 +3803,8 @@ L.CanvasTileLayer = L.Layer.extend({
 				},
 				NewPosX: {
 					type: 'long',
-					value: aPos.x
+					// In Calc RTL mode ensure that we send positive X coordinates.
+					value: calcRTL ? -aPos.x : aPos.x
 				},
 				NewPosY: {
 					type: 'long',
@@ -4321,23 +4355,26 @@ L.CanvasTileLayer = L.Layer.extend({
 		var startPos = this._map.project(this._textSelectionStart.getSouthWest());
 		var endPos = this._map.project(this._textSelectionEnd.getSouthWest());
 		var startMarkerPos = this._map.project(startMarker.getLatLng());
+		// CalcRTL: position from core are in document coordinates. Conversion to layer coordinates for each maker is done
+		// in L.Layer.getLayerPositionVisibility(). Icons of RTL "start" and "end" has to be interchanged.
+		var calcRTL = this.isCalcRTL();
 		if (startMarkerPos.distanceTo(endPos) < startMarkerPos.distanceTo(startPos) && startMarker._icon && endMarker._icon) {
 			// if the start marker is actually closer to the end of the selection
 			// reverse icons and markers
-			L.DomUtil.removeClass(startMarker._icon, 'leaflet-selection-marker-start');
-			L.DomUtil.removeClass(endMarker._icon, 'leaflet-selection-marker-end');
-			L.DomUtil.addClass(startMarker._icon, 'leaflet-selection-marker-end');
-			L.DomUtil.addClass(endMarker._icon, 'leaflet-selection-marker-start');
+			L.DomUtil.removeClass(startMarker._icon, calcRTL ? 'leaflet-selection-marker-end' : 'leaflet-selection-marker-start');
+			L.DomUtil.removeClass(endMarker._icon, calcRTL ? 'leaflet-selection-marker-start' : 'leaflet-selection-marker-end');
+			L.DomUtil.addClass(startMarker._icon, calcRTL ? 'leaflet-selection-marker-start' : 'leaflet-selection-marker-end');
+			L.DomUtil.addClass(endMarker._icon, calcRTL ? 'leaflet-selection-marker-end' : 'leaflet-selection-marker-start');
 			var tmp = startMarker;
 			startMarker = endMarker;
 			endMarker = tmp;
 		}
 		else if (startMarker._icon && endMarker._icon) {
 			// normal markers and normal icons
-			L.DomUtil.removeClass(startMarker._icon, 'leaflet-selection-marker-end');
-			L.DomUtil.removeClass(endMarker._icon, 'leaflet-selection-marker-start');
-			L.DomUtil.addClass(startMarker._icon, 'leaflet-selection-marker-start');
-			L.DomUtil.addClass(endMarker._icon, 'leaflet-selection-marker-end');
+			L.DomUtil.removeClass(startMarker._icon, calcRTL ? 'leaflet-selection-marker-start' : 'leaflet-selection-marker-end');
+			L.DomUtil.removeClass(endMarker._icon, calcRTL ? 'leaflet-selection-marker-end' : 'leaflet-selection-marker-start');
+			L.DomUtil.addClass(startMarker._icon, calcRTL ? 'leaflet-selection-marker-end' : 'leaflet-selection-marker-start');
+			L.DomUtil.addClass(endMarker._icon, calcRTL ? 'leaflet-selection-marker-start' : 'leaflet-selection-marker-end');
 		}
 
 		if (!startMarker.isDragged) {
@@ -4561,8 +4598,14 @@ L.CanvasTileLayer = L.Layer.extend({
 			return rectangle;
 		}
 
+		// Calc
 		var rectSize = rectangle.getSize();
 		var newTopLeft = this.sheetGeometry.getTileTwipsPointFromPrint(rectangle.getTopLeft());
+		if (this.isLayoutRTL()) { // Convert to negative display-twips coordinates.
+			newTopLeft.x = -newTopLeft.x;
+			rectSize.x = -rectSize.x;
+		}
+
 		return new L.Bounds(newTopLeft, newTopLeft.add(rectSize));
 	},
 
@@ -6510,6 +6553,14 @@ L.CanvasTileLayer = L.Layer.extend({
 			coords.y * this.options.tileHeightTwips / this._tileSize / zoomFactor);
 		var tileSize = new L.Point(this.options.tileWidthTwips / zoomFactor, this.options.tileHeightTwips / zoomFactor);
 		return new L.Bounds(tileTopLeft, tileTopLeft.add(tileSize));
+	},
+
+	isLayoutRTL: function () {
+		return !!this._layoutIsRTL;
+	},
+
+	isCalcRTL: function () {
+		return this.isCalc() && this.isLayoutRTL();
 	}
 
 });

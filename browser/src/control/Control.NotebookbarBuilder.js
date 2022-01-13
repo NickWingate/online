@@ -923,11 +923,13 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		});
 
 		$(control.container).bind('beforeshow.smapi', {self: menubar}, menubar._beforeShow);
+		$(control.container).bind('beforehide.smapi', {self: menubar}, menubar._beforeHide);
 		$(control.container).bind('click.smapi', {self: menubar}, menubar._onClicked);
 		$(control.container).bind('select.smapi', {self: menubar}, menubar._onItemSelected);
 		$(control.container).bind('mouseenter.smapi', {self: menubar}, menubar._onMouseEnter);
 		$(control.container).bind('mouseleave.smapi', {self: menubar}, menubar._onMouseLeave);
 		$(control.container).bind('keydown', {self: menubar}, menubar._onKeyDown);
+		$(control.container).bind('hideAll.smapi', {self: menubar}, menubar._onMouseOut);
 
 		// initialize languages list
 		builder.map.on('commandvalues', menubar._onInitLanguagesMenu, menubar);

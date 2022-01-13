@@ -32,6 +32,8 @@ class AutoFillMarkerSection {
 	cursorBorderWidth: number = 2;
 	selectionBorderWidth: number = 1;
 
+	isCalcRTL: () => boolean;
+
 	constructor () {
 		this.map = L.Map.THIS;
 
@@ -141,23 +143,27 @@ class AutoFillMarkerSection {
 		var translation = desktop ?
 			[this.size[0], this.size[1]] :
 			[Math.floor(this.size[0] * 0.5), Math.floor(this.size[1] * 0.5)];
+		const adjustForRTL = this.isCalcRTL();
+		const transformX = (xcoord: number) => {
+			return adjustForRTL ? this.size[0] - xcoord : xcoord;
+		};
 
 		this.context.beginPath();
-		this.context.moveTo(-0.5, -0.5);
+		this.context.moveTo(transformX(-0.5), -0.5);
 		var borderWidth = this.sectionProperties.selectedAreaPoint ? this.selectionBorderWidth : this.cursorBorderWidth;
-		this.context.lineTo(this.size[0] - 0.5 - (desktop ? borderWidth : 0), -0.5);
+		this.context.lineTo(transformX(this.size[0] - 0.5 - (desktop ? borderWidth : 0)), -0.5);
 		this.context.stroke();
 
 		if (!desktop) {
 			this.context.beginPath();
-			this.context.moveTo(this.size[0] - 0.5 - (desktop ? borderWidth : 0), -0.5);
-			this.context.lineTo(this.size[0] - 0.5 - (desktop ? borderWidth : 0), translation[1] - 0.5 - borderWidth);
+			this.context.moveTo(transformX(this.size[0] - 0.5 - (desktop ? borderWidth : 0)), -0.5);
+			this.context.lineTo(transformX(this.size[0] - 0.5 - (desktop ? borderWidth : 0)), translation[1] - 0.5 - borderWidth);
 			this.context.stroke();
 		}
 
 		this.context.beginPath();
-		this.context.moveTo(-0.5, -0.5);
-		this.context.lineTo(-0.5, translation[1] - 0.5 - borderWidth);
+		this.context.moveTo(transformX(-0.5), -0.5);
+		this.context.lineTo(transformX(-0.5), translation[1] - 0.5 - borderWidth);
 		this.context.stroke();
 	}
 

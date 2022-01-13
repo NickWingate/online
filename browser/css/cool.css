@@ -200,6 +200,16 @@ nav.spreadsheet-color-indicator ~ #sidebar-dock-wrapper {
 	overflow-x: hidden;
 	overflow-y: auto;
 	z-index: 1200;
+	scrollbar-width: auto;
+	scrollbar-color: #bec0c0 transparent;
+}
+
+#sidebar-panel::-webkit-scrollbar {
+	width: 8px;
+}
+
+#sidebar-panel::-webkit-scrollbar-thumb {
+	background-color: #bec0c0;
 }
 
 #toolbar-wrapper {
@@ -346,9 +356,13 @@ nav.spreadsheet-color-indicator ~ #sidebar-dock-wrapper {
 	position: absolute;
 	left: 24px;
 }
-.cool-annotation.annotation-active .cool-annotation-collapsed{
+.cool-annotation.annotation-active:not(.rtl) .cool-annotation-collapsed{
 	position: absolute;
 	left: 0 !important;
+}
+.cool-annotation.annotation-active.rtl .cool-annotation-collapsed{
+	position: absolute;
+	left: 48px !important;
 }
 
 #document-container > .cool-annotation:hover .cool-annotation-collapsed{
@@ -858,7 +872,7 @@ nav.drawing-color-indicator ~ #main-document-content .cool-annotation-reply-coun
 }
 #about-dialog-info-container {
 	align-items: center;
-	justify-content: left;
+	justify-content: flex-start;
 	flex-grow: 1;
 }
 #about-dialog-info {

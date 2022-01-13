@@ -272,10 +272,10 @@ protected:
                 }
             }
 
-            std::streamsize size = request.getContentLength();
-            char buffer[size];
-            message.read(buffer, size);
-            setFileContent(std::string(buffer, size));
+            const std::streamsize size = request.getContentLength();
+            std::vector<char> buffer(size);
+            message.read(buffer.data(), size);
+            setFileContent(Util::toString(buffer));
 
             std::unique_ptr<http::Response> response = assertPutFileRequest(request);
             if (response)
@@ -291,8 +291,8 @@ protected:
                 const std::string body = "{\"LastModifiedTime\": \"" +
                                          Util::getIso8601FracformatTime(_fileLastModifiedTime) +
                                          "\" }";
-                LOG_TST("Fake wopi host response to POST " << uriReq.getPath() << ": 200 OK "
-                                                           << body);
+                LOG_TST("Fake wopi host (default) response to POST " << uriReq.getPath()
+                                                                     << ": 200 OK " << body);
                 http::Response httpResponse(http::StatusLine(200));
                 httpResponse.setBody(body);
                 socket->sendAndShutdown(httpResponse);
@@ -308,14 +308,16 @@ protected:
 
         return false;
     }
+
 };
 
 /// Send a command message to WSD from a WopiTestServer.
 #define WSD_CMD(MSG)                                                                               \
     do                                                                                             \
     {                                                                                              \
-        LOG_TST(": Sending: " << MSG);                                                             \
+        LOG_TST("Sending: " << MSG);                                                               \
         helpers::sendTextFrame(*getWs()->getCOOLWebSocket(), MSG, getTestname());                  \
+        SocketPoll::wakeupWorld();                                                                 \
     } while (false)
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */
